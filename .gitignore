@@ -1,5 +1,5 @@
-# 대용량 데이터 (로컬 전용 — GitHub 100MB 제한 초과)
-/data/combined_sorted_weather_data.csv
+# 원본 데이터 (로컬 전용 — 대용량 / 재배포 대상 아님)
+/data/source/
 
 # MS Office 임시 잠금 파일
 ~$*

@@ -42,12 +42,13 @@ import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
-XLSX = ROOT / "data" / "15분 수전량 2025.09~.xlsx"
-WCSV = ROOT / "data" / "combined_sorted_weather_data.csv"
+SRC = ROOT / "data" / "source"
+XLSX = SRC / "15분 수전량 2025.09~.xlsx"
+WCSV = SRC / "combined_sorted_weather_data.csv"
 OUT = ROOT / "data" / "data.csv"
 
-# 원본 xlsx 에 없는 하루치 보강분: (파일 경로, 날짜)
-PATCH_FILES = [(ROOT / "data" / "전기사용량_시간대별(20260407)_15분.xls", "2026-04-07")]
+# 원본 xlsx 에 없는 하루치 보강분: (파일 경로, 날짜). 파일이 없으면 조용히 건너뜀.
+PATCH_FILES = [(SRC / "전기사용량_시간대별(20260407)_15분.xls", "2026-04-07")]
 
 # xlsx 의 수전량 수치 컬럼 7개 (날짜·시간 제외, 파일 순서 그대로)
 POWER_NUM_COLS = ["사용량(kWh)", "최대수요(kW)", "무효전력_지상(kVarh)", "무효전력_진상(kVarh)",

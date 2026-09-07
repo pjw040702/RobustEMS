@@ -207,13 +207,20 @@ RobustEMS/
 ├── README.md
 ├── TalkFile_연구계획서_캠퍼스EMS_AI스트레스_v1.docx   # 원본 연구계획서
 ├── scripts/
-│   └── merge_weather.py                              # 수전량 × 기상 × 캘린더 → data/data.csv 생성
+│   ├── merge_weather.py         # 15분 수전량 × 1분 기상 × 캘린더 → data/data.csv
+│   └── build_data_long.py       # 일일 수전량 × 1분 기상(일집계) × 캘린더 → data/data_long.csv
 └── data/
-    ├── 15분 수전량 2025.09~.xlsx                      # 15분 캠퍼스 수전량 실측 (2025-09-04 ~ 2026-09-02, 2026-04-07 누락)
-    ├── combined_sorted_weather_data.csv              # 1분 기상 관측 (지점 119, 2021-09 ~ 2026-09) — 대용량, 로컬 전용
-    ├── 전기사용량_시간대별(20260407)_15분.xls          # 뒤늦게 받은 2026-04-07 하루치 수전량 (HTML 표) — merge_weather.py 가 자동 병합
-    └── data.csv                                      # 통합 데이터셋 (34,944행)
+    ├── data.csv                 # 15분 통합 데이터셋 (2025-09 ~ 2026-09, 34,944행 × 41열) — git 추적
+    ├── data_long.csv            # 일 단위 장기 데이터셋 (2021-09 ~ 2026-09, 1,826행 × 32열) — gitignore
+    └── source/                  # 원본 (gitignore, 로컬 전용)
+        ├── 15분 수전량 2025.09~.xlsx              # 15분 수전량 (2025-09-04 ~ 2026-09-02, 2026-04-07 누락)
+        ├── 일일 수전량 2021.09~.csv               # 일 단위 총 사용량 (2021-09-03 ~ 2026-09-02)
+        ├── combined_sorted_weather_data.csv      # 1분 기상 관측 (지점 119, 2021-09 ~ 2026-09)
+        └── 전기사용량_시간대별(20260407)_15분.xls  # 2026-04-07 하루치 보강분 (HTML 표) — merge_weather.py 가 자동 병합
 ```
+
+> `data/source/` 와 `data/data_long.csv` 는 `.gitignore` 로 제외(대용량·로컬 전용). `data/data.csv` 만 추적한다.
+> `merge_weather.py` 재실행 시 `data/source/전기사용량_시간대별(20260407)_15분.xls` 가 없으면 2026-04-07 96행이 빠진다.
 
 ### `data/data.csv` — 수전량 × 기상 × 캘린더 통합 데이터셋
 
@@ -247,16 +254,21 @@ RobustEMS/
   | `day_of_week` | 요일 영문명 `Monday`–`Sunday` |
   | `weekend` | 토·일이면 `1` |
   | `holiday` | 대한민국 공휴일(대체공휴일 포함) **또는 일요일**이면 `1` — 범위 내 공휴일 22일 |
-  | `vacation` | 방학 기간이면 `1` — `2025-12-20~2026-03-01`, `2026-06-20~2026-08-30` (지정 `2025-06-24~08-31`은 데이터 범위 밖) |
-  | `exam_period` | 시험 기간이면 `1` — `2025-10-06~10-24`, `2025-12-01~12-19`, `2026-04-06~04-24`, `2026-06-01~06-19` |
+  | `vacation` | 방학이면 `1` (아래 학사일정 규칙) — 데이터 범위 내 `2025-12-20~2026-03-01`, `2026-06-20~2026-08-30` |
+  | `exam_period` | 시험기간이면 `1` — `2025-10-06~10-24`, `2025-12-01~12-19`, `2026-04-06~04-24`, `2026-06-01~06-19` |
 
-  공휴일 목록·기간 정의는 `scripts/merge_weather.py` 상단 `KR_HOLIDAYS` / `VACATION_RANGES` / `EXAM_RANGES` 에서 관리한다.
-  `근로자의날`(2026-05-01, 근로기준법상 유급휴일)과 `제헌절`(2026-07-17, 2026년 재지정)도 공휴일로 포함했다.
+<a name="academic-calendar"></a>
+  **학사일정 규칙** (`data.csv` · `data_long.csv` 공통):
+  - 봄학기 1주차 = **3/2 이 포함된 주**, 가을학기 1주차 = **9/1 이 포함된 주**. 단 3/2(9/1)이 토·일이면
+    그 다음 월요일이 1주차 월요일.
+  - 수업 16주 = 1주차 월 ~ 16주차 금 (개강일 + 109일). 그 밖의 날은 `vacation = 1`.
+  - `exam_period = 1` : **6~8주차**, **14~16주차** (각 3주, 1주차 월 기준 개강일 + 35~53일 / 91~109일).
+  - `holiday` = 대한민국 공휴일(대체·임시공휴일 포함, `holidays` 라이브러리 기준) **또는 일요일**.
+    `근로자의날`·`제헌절`도 포함. 목록은 각 스크립트 상단 `KR_HOLIDAYS`.
 
-- **결측** (원자료 관측 공백에서 비롯): `temp_c` 4구간(센서 개별 결측, `obs_minutes`는 15),
-  `humidity_pct` 155, `pressure_sea_hpa` 3, `precip_cumulative_mm`·`precip_15min_mm` 35구간.
-  `obs_minutes < 15` 인 구간 26개(1분 피드의 소규모 누락). 2026-04-07 포함 전 구간 기상·캘린더 완비.
-- **재생성** — `python scripts/merge_weather.py` (`data/` 의 xlsx·기상 CSV·2026-04-07 xls 필요)
+- **결측** (원자료 관측 공백): `temp_c` 4구간(센서 개별 결측, `obs_minutes`는 15), `humidity_pct` 155,
+  `pressure_sea_hpa` 3, `precip_cumulative_mm`·`precip_15min_mm` 35구간. `obs_minutes < 15` 인 구간 26개.
+- **재생성** — `python scripts/merge_weather.py` (`data/source/` 의 xlsx·기상 CSV·2026-04-07 xls 필요)
 
 #### 컬럼명 대응 (원본 한글 → 출력 영어)
 
@@ -278,6 +290,24 @@ RobustEMS/
 | 풍속(m/s) | `wind_speed_ms` | · | | |
 | 현지기압(hPa) | `pressure_local_hpa` | · | | |
 | 해면기압(hPa) | `pressure_sea_hpa` | · | | |
+
+### `data/data_long.csv` — 일 단위 장기 데이터셋
+
+`일일 수전량 2021.09~.csv`(하루 총 사용량)에 `combined_sorted_weather_data.csv`를 **일 단위로 집계**해
+결합. **1,826행 × 32열**, `2021-09-03 ~ 2026-09-02`. 인코딩·컬럼명 규칙은 `data/data.csv`와 동일.
+
+- **컬럼 차이** (일 단위라 15분·부가 지표 없음): `time` `datetime` 및 `peak_demand_kw` `reactive_*`
+  `co2_tco2` `power_factor_*` 제외. 15분 적산 컬럼은 개명 —
+  `solar_rad_15min_mj_m2 → solar_rad_mj_m2`, `sunshine_15min_sec → sunshine_sec`(0~86400),
+  `precip_15min_mm → precip_mm`, `precip_cumulative_mm` 제외. `obs_minutes` 는 0~1440.
+- **컬럼 순서**: `date` `usage_kwh` → 캘린더(5) → 기상(`temp_c`~`precip_mm`, 9) → 특보·주의보(15) → `obs_minutes`.
+- **기상 일집계**: 기온·습도·기압·풍속 = 일 평균, `wind_dir_deg` = 벡터 평균,
+  `solar_rad_mj_m2`·`sunshine_sec`·`precip_mm` = 그날 마지막(≈23:59) 누적값(= 일 합계),
+  특보·주의보 = 하루 1분이라도 발효 시 `1`.
+- **캘린더**: [학사일정 규칙](#academic-calendar) 그대로 전 연도 적용. `data.csv`와 겹치는 364일은 5개
+  캘린더 컬럼·`usage_kwh` 일합이 완전히 일치.
+- **결측**: `usage_kwh` 4일(원본 공백: 2023-07-24, 08-18~20), `precip_mm` 1일(2023-07-31 강수 관측 공백).
+- **재생성** — `python scripts/build_data_long.py` (`data/source/` 의 일일 수전량 CSV·기상 CSV 필요).
 
 ---
 
