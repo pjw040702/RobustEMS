@@ -206,10 +206,75 @@ workload 유연화 간의 등가 교환관계를 도출한다.
 RobustEMS/
 ├── README.md
 ├── TalkFile_연구계획서_캠퍼스EMS_AI스트레스_v1.docx   # 원본 연구계획서
+├── scripts/
+│   └── merge_weather.py                              # 수전량 × 기상 매칭 스크립트 (data/data.csv 생성)
 └── data/
-    ├── 15분 수전량 2025.09~.xlsx                      # 15분 해상도 캠퍼스 수전량 실측 (2025.09~)
-    └── combined_sorted_weather_data.csv              # 시간대 정렬된 기상 관측 데이터 (기온·습도·일사량 등)
+    ├── 15분 수전량 2025.09~.xlsx                      # 15분 해상도 캠퍼스 수전량 실측 (2025-09-04 ~ 2026-09-02)
+    ├── combined_sorted_weather_data.csv              # 1분 해상도 기상 관측 (지점 119, 2021-09 ~ 2026-09) — 대용량, 로컬 전용
+    └── data.csv                                      # 위 둘을 15분 구간 기준으로 매칭한 통합 데이터셋
 ```
+
+### `data/data.csv` — 수전량 × 기상 × 캘린더 통합 데이터셋
+
+`15분 수전량 …xlsx`의 각 (날짜, 시간) 구간에 `combined_sorted_weather_data.csv`(1분 관측, 지점 119)와
+캘린더 파생 변수를 결합한 파일. **34,848행 × 41열**, 인코딩 **BOM 없는 UTF-8**, 컬럼명은 전부
+영어 snake_case(값도 순수 ASCII).
+컬럼 순서: 수전량(9) → `datetime` → 캘린더(5) → 기상(26).
+
+- **매칭 기준** — 수전량의 `time` 은 구간 **종료 시각** 라벨이다. `00:15` → `(00:00, 00:15]` 구간
+  (1분 관측 `00:01`–`00:15`), `24:00` → 익일 `00:00`. `datetime` 열에 구간 종료 시각을 timestamp로 추가.
+- **집계 방식** (구간당 최대 15개 1분 관측)
+
+  | 그룹 | 열 | 방법 |
+  | --- | --- | --- |
+  | 수전량 (원본) | `date` `time` `usage_kwh` `peak_demand_kw` `reactive_lag/lead_kvarh` `co2_tco2` `power_factor_lag/lead_pct` | 그대로 |
+  | 기상 (순간값) | `temp_c` `humidity_pct` `wind_speed_ms` `pressure_local_hpa` `pressure_sea_hpa` | 구간 평균 |
+  | 기상 (방향) | `wind_dir_deg` | 벡터(원형) 평균 |
+  | 기상 (적산) | `solar_rad_15min_mj_m2` `sunshine_15min_sec` `precip_15min_mm` | 15분 적산 — 원자료가 매일 00:01 리셋되는 **하루 누적값**이라, 분단위 증가분(리셋·음수는 0)을 합산해 해당 15분 값으로 환산 |
+  | 기상 (원값) | `precip_cumulative_mm` | 구간 종료 시각의 그날 누적 강수량 |
+  | 특보·주의보 14종 | `strong_wind_*` `heavy_snow_*` `typhoon_*` `heavy_rain_*` (각 `_warning`/`_advisory`), `dry_advisory` `cold_wave_*` `yellow_dust_warning` | 구간 내 1분이라도 발효 시 `1` |
+  | 조건 | `tropical_night` | 열대야이면 `1` |
+  | 진단 | `obs_minutes` | 실제 매칭된 1분 관측 수 (0–15) |
+
+- **캘린더 파생** (`date` 기준, 하루 96구간 공통)
+
+  | 열 | 정의 |
+  | --- | --- |
+  | `day_of_week` | 요일 영문명 `Monday`–`Sunday` |
+  | `weekend` | 토·일이면 `1` |
+  | `holiday` | 대한민국 공휴일(대체공휴일 포함) **또는 일요일**이면 `1` — 범위 내 공휴일 22일 |
+  | `vacation` | 방학 기간이면 `1` — `2025-12-20~2026-03-01`, `2026-06-20~2026-08-30` (지정 `2025-06-24~08-31`은 데이터 범위 밖) |
+  | `exam_period` | 시험 기간이면 `1` — `2025-10-06~10-24`, `2025-12-01~12-19`, `2026-04-06~04-24`, `2026-06-01~06-19` |
+
+  공휴일 목록·기간 정의는 `scripts/merge_weather.py` 상단 `KR_HOLIDAYS` / `VACATION_RANGES` / `EXAM_RANGES` 에서 관리한다.
+  `근로자의날`(2026-05-01, 근로기준법상 유급휴일)과 `제헌절`(2026-07-17, 2026년 재지정)도 공휴일로 포함했다.
+
+- **결측·공백**
+  - 날짜 누락: **2026-04-07 하루 전체**가 원본 수전량에 없어 해당 일 96행이 빠져 있다(363일 × 96 = 34,848행).
+  - 기상 결측(원자료 관측 공백): `temp_c` 4구간(센서 개별 결측, `obs_minutes`는 15), `humidity_pct` 155,
+    `pressure_sea_hpa` 3, `precip_cumulative_mm`·`precip_15min_mm` 35구간. `obs_minutes < 15` 인 구간 26개(1분 피드의 소규모 누락).
+- **재생성** — `python scripts/merge_weather.py`
+
+#### 컬럼명 대응 (원본 한글 → 출력 영어)
+
+| 한글 | 영어 | · | 한글 | 영어 |
+| --- | --- | --- | --- | --- |
+| 날짜 | `date` | · | 일사_15분(MJ/m^2) | `solar_rad_15min_mj_m2` |
+| 시간 | `time` | · | 일조_15분(Sec) | `sunshine_15min_sec` |
+| 사용량(kWh) | `usage_kwh` | · | 누적강수량(mm) | `precip_cumulative_mm` |
+| 최대수요(kW) | `peak_demand_kw` | · | 강수량_15분(mm) | `precip_15min_mm` |
+| 무효전력_지상(kVarh) | `reactive_lag_kvarh` | · | 강풍경보 / 주의보 | `strong_wind_warning` / `_advisory` |
+| 무효전력_진상(kVarh) | `reactive_lead_kvarh` | · | 대설경보 / 주의보 | `heavy_snow_warning` / `_advisory` |
+| CO2(tCO2) | `co2_tco2` | · | 호우경보 / 주의보 | `heavy_rain_warning` / `_advisory` |
+| 역률_지상(%) | `power_factor_lag_pct` | · | 태풍경보 / 주의보 | `typhoon_warning` / `_advisory` |
+| 역률_진상(%) | `power_factor_lead_pct` | · | 한파경보 / 주의보 | `cold_wave_warning` / `_advisory` |
+| 일시 | `datetime` | · | 건조주의보 | `dry_advisory` |
+| 기온(°C) | `temp_c` | · | 황사경보 | `yellow_dust_warning` |
+| 습도(%) | `humidity_pct` | · | 열대야 | `tropical_night` |
+| 풍향(deg) | `wind_dir_deg` | · | 관측분수 | `obs_minutes` |
+| 풍속(m/s) | `wind_speed_ms` | · | | |
+| 현지기압(hPa) | `pressure_local_hpa` | · | | |
+| 해면기압(hPa) | `pressure_sea_hpa` | · | | |
 
 ---
 
