@@ -25,6 +25,11 @@ data/data.csv 를 생성한다.
   vacation      : 방학 기간이면 1  (VACATION_RANGES)
   exam_period   : 시험 기간이면 1  (EXAM_RANGES)
 
+원본 xlsx 에 빠져 있는 2026-04-07 은 뒤늦게 받은 하루치 파일
+data/전기사용량_시간대별(20260407)_15분.xls (HTML 표) 의 15분 표에서 수전량을 읽어
+자동으로 합친다. 이 날의 기상·캘린더는 다른 날과 동일하게 산출된다.
+(PATCH_XLS 가 없으면 조용히 건너뛴다. pd.read_html 은 lxml/bs4 중 하나가 필요.)
+
 출력(data.csv)의 컬럼명은 COLUMN_RENAME 에 따라 전부 영어(snake_case)로,
 인코딩은 BOM 없는 UTF-8 로 저장한다. 원본 한글 헤더 대응은 COLUMN_RENAME 참조.
 컬럼 순서: 수전량 9 -> datetime -> 캘린더 5 -> 기상 26 (총 41열).
@@ -40,6 +45,13 @@ ROOT = Path(__file__).resolve().parents[1]
 XLSX = ROOT / "data" / "15분 수전량 2025.09~.xlsx"
 WCSV = ROOT / "data" / "combined_sorted_weather_data.csv"
 OUT = ROOT / "data" / "data.csv"
+
+# 원본 xlsx 에 없는 하루치 보강분: (파일 경로, 날짜)
+PATCH_FILES = [(ROOT / "data" / "전기사용량_시간대별(20260407)_15분.xls", "2026-04-07")]
+
+# xlsx 의 수전량 수치 컬럼 7개 (날짜·시간 제외, 파일 순서 그대로)
+POWER_NUM_COLS = ["사용량(kWh)", "최대수요(kW)", "무효전력_지상(kVarh)", "무효전력_진상(kVarh)",
+                  "CO2(tCO2)", "역률_지상(%)", "역률_진상(%)"]
 
 FLAG_COLS = ["강풍경보", "강풍주의보", "건조주의보", "대설경보", "대설주의보", "열대야", "태풍경보",
              "태풍주의보", "폭염경보", "폭염주의보", "한파경보", "한파주의보", "호우경보", "호우주의보", "황사경보"]
@@ -144,6 +156,26 @@ def load_power(path: Path) -> pd.DataFrame:
     return p
 
 
+def load_patch_power(path: Path, date_str: str) -> pd.DataFrame:
+    """하루치 '전기사용량_시간대별' HTML 표(.xls)에서 15분 수전량을 load_power 와 같은 스키마로 반환."""
+    t = pd.read_html(path, encoding="utf-8")[2]          # table 2 = 48x16, 좌/우 8열 블록
+    parts = []
+    for j in (0, 8):
+        b = t.iloc[:, j:j + 8].copy()
+        b.columns = ["시간"] + POWER_NUM_COLS
+        parts.append(b)
+    d = pd.concat(parts, ignore_index=True)
+    d = d[d["시간"].astype(str).str.match(r"^\d{2}:\d{2}$")].reset_index(drop=True)
+    d.insert(0, "날짜", date_str)
+    for c in POWER_NUM_COLS:
+        d[c] = pd.to_numeric(d[c].astype(str).str.replace(",", "", regex=False), errors="coerce")
+    hh = d["시간"].str.slice(0, 2).astype(int)
+    mm = d["시간"].str.slice(3, 5).astype(int)
+    base = pd.to_datetime(d["날짜"], format="%Y-%m-%d")
+    d["interval_end"] = base + pd.to_timedelta(hh, unit="h") + pd.to_timedelta(mm, unit="m")
+    return d
+
+
 def load_weather(path: Path, start, end) -> pd.DataFrame:
     w = pd.read_csv(path)
     w.columns = [str(c).strip() for c in w.columns]
@@ -202,6 +234,19 @@ def add_calendar(merged: pd.DataFrame, date_col: str) -> pd.DataFrame:
 
 def main() -> None:
     p = load_power(XLSX)
+    for patch_path, patch_date in PATCH_FILES:
+        if not patch_path.exists():
+            continue
+        n0 = len(p)
+        p = (pd.concat([p, load_patch_power(patch_path, patch_date)], ignore_index=True)
+               .drop_duplicates(subset="interval_end", keep="first")
+               .sort_values("interval_end").reset_index(drop=True))
+        print(f"패치   : {patch_path.name}  +{len(p) - n0}행  ({patch_date})")
+
+    # concat 로 섞인 dtype 정리: 정수값만 있는 컬럼(역률_진상 등)은 int 로 되돌린다.
+    for c in POWER_NUM_COLS:
+        p[c] = pd.to_numeric(p[c], errors="coerce", downcast="integer")
+
     start = p["interval_end"].min() - pd.Timedelta(minutes=15)
     end = p["interval_end"].max()
     print(f"수전량 : {p['interval_end'].min()} ~ {p['interval_end'].max()}  ({len(p)}행)")

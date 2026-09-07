@@ -207,22 +207,26 @@ RobustEMS/
 ├── README.md
 ├── TalkFile_연구계획서_캠퍼스EMS_AI스트레스_v1.docx   # 원본 연구계획서
 ├── scripts/
-│   └── merge_weather.py                              # 수전량 × 기상 매칭 스크립트 (data/data.csv 생성)
+│   └── merge_weather.py                              # 수전량 × 기상 × 캘린더 → data/data.csv 생성
 └── data/
-    ├── 15분 수전량 2025.09~.xlsx                      # 15분 해상도 캠퍼스 수전량 실측 (2025-09-04 ~ 2026-09-02)
-    ├── combined_sorted_weather_data.csv              # 1분 해상도 기상 관측 (지점 119, 2021-09 ~ 2026-09) — 대용량, 로컬 전용
-    └── data.csv                                      # 위 둘을 15분 구간 기준으로 매칭한 통합 데이터셋
+    ├── 15분 수전량 2025.09~.xlsx                      # 15분 캠퍼스 수전량 실측 (2025-09-04 ~ 2026-09-02, 2026-04-07 누락)
+    ├── combined_sorted_weather_data.csv              # 1분 기상 관측 (지점 119, 2021-09 ~ 2026-09) — 대용량, 로컬 전용
+    ├── 전기사용량_시간대별(20260407)_15분.xls          # 뒤늦게 받은 2026-04-07 하루치 수전량 (HTML 표) — merge_weather.py 가 자동 병합
+    └── data.csv                                      # 통합 데이터셋 (34,944행)
 ```
 
 ### `data/data.csv` — 수전량 × 기상 × 캘린더 통합 데이터셋
 
 `15분 수전량 …xlsx`의 각 (날짜, 시간) 구간에 `combined_sorted_weather_data.csv`(1분 관측, 지점 119)와
-캘린더 파생 변수를 결합한 파일. **34,848행 × 41열**, 인코딩 **BOM 없는 UTF-8**, 컬럼명은 전부
-영어 snake_case(값도 순수 ASCII).
+캘린더 파생 변수를 결합한 파일. **34,944행 × 41열** (364일 × 96구간), 인코딩 **BOM 없는 UTF-8**,
+컬럼명은 전부 영어 snake_case(값도 순수 ASCII).
 컬럼 순서: 수전량(9) → `datetime` → 캘린더(5) → 기상(26).
 
 - **매칭 기준** — 수전량의 `time` 은 구간 **종료 시각** 라벨이다. `00:15` → `(00:00, 00:15]` 구간
   (1분 관측 `00:01`–`00:15`), `24:00` → 익일 `00:00`. `datetime` 열에 구간 종료 시각을 timestamp로 추가.
+- **2026-04-07** — 원본 xlsx에 없던 하루. `전기사용량_시간대별(20260407)_15분.xls`(HTML 표)의 15분 표에서
+  수전량 9열을 읽어 `merge_weather.py` 가 자동 병합하며, 기상·캘린더는 다른 날과 동일하게 산출된다.
+  (일 사용량 235,511.64 kWh / 일 피크 11,363.04 kW — 원본 파일 요약과 일치.)
 - **집계 방식** (구간당 최대 15개 1분 관측)
 
   | 그룹 | 열 | 방법 |
@@ -249,11 +253,10 @@ RobustEMS/
   공휴일 목록·기간 정의는 `scripts/merge_weather.py` 상단 `KR_HOLIDAYS` / `VACATION_RANGES` / `EXAM_RANGES` 에서 관리한다.
   `근로자의날`(2026-05-01, 근로기준법상 유급휴일)과 `제헌절`(2026-07-17, 2026년 재지정)도 공휴일로 포함했다.
 
-- **결측·공백**
-  - 날짜 누락: **2026-04-07 하루 전체**가 원본 수전량에 없어 해당 일 96행이 빠져 있다(363일 × 96 = 34,848행).
-  - 기상 결측(원자료 관측 공백): `temp_c` 4구간(센서 개별 결측, `obs_minutes`는 15), `humidity_pct` 155,
-    `pressure_sea_hpa` 3, `precip_cumulative_mm`·`precip_15min_mm` 35구간. `obs_minutes < 15` 인 구간 26개(1분 피드의 소규모 누락).
-- **재생성** — `python scripts/merge_weather.py`
+- **결측** (원자료 관측 공백에서 비롯): `temp_c` 4구간(센서 개별 결측, `obs_minutes`는 15),
+  `humidity_pct` 155, `pressure_sea_hpa` 3, `precip_cumulative_mm`·`precip_15min_mm` 35구간.
+  `obs_minutes < 15` 인 구간 26개(1분 피드의 소규모 누락). 2026-04-07 포함 전 구간 기상·캘린더 완비.
+- **재생성** — `python scripts/merge_weather.py` (`data/` 의 xlsx·기상 CSV·2026-04-07 xls 필요)
 
 #### 컬럼명 대응 (원본 한글 → 출력 영어)
 
