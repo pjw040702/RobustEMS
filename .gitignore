@@ -1,6 +1,18 @@
 # 원본 데이터 (로컬 전용 — 대용량 / 재배포 대상 아님)
 /data/source/
-/reference/
+/reference/*
+
+# 단, 우리가 직접 작성한 문서와 파이프라인이 런타임에 읽는 파생 데이터는 추적
+# (이게 빠져 있어서 레포만으로는 ess_pv_pipeline.ipynb 재현이 불가능했음)
+!/reference/*.md
+!/reference/campus_pv_potential.csv
 
 # MS Office 임시 잠금 파일
 ~$*
+
+# 노트북이 자동 생성하는 캐시·가중치 (재생성 가능)
+/data/*.npz
+/data/*.pt
+
+# 현재 미사용 자료 보관 (삭제 후보)
+/reference/_archive/
