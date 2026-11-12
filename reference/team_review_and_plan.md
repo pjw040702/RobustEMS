@@ -220,7 +220,9 @@ parameter effects: A novel approach based on projection neural networks and deep
   (ESS ×100/×1000)로 구현 오류가 아님을 확인했다. **이 문제의 유일한 전역 결합은 연간 피크**이고,
   완전예지에서 계층적 MPC는 연간 LP와 동일하다. myopia 임계는 ESS가 일평균 부하의 **256%**
 - DPNN 학습 — 목적함수 초과 중앙 **+0.96%** / 최대 +3.87%, 등식 잔차 3.6e-12 kW
-- 스윕 가속 — Φ 1천~2만개에서 **약 3,000~3,500배**(측정 시점마다 변동)
+- 스윕 가속 — Φ 5천~2만개에서 **약 3,200~3,800배**(Φ 1천 행은 워밍업 때문에 과장된다)
+- **인과적 피크 목표 규칙** — 래칫 상태(running max) + 초과분만 과금하는 형태로 정식화했다.
+  믿음 $\theta$=oracle 이면 연간 LP를 복원하고, 믿음이 아예 없어도 **+0.0072%**뿐이다
 
 **Phase 4 — 스트레스 시나리오**
 - **AI workload 트레이스** (Alibaba PAI / MIT Supercloud / PM100) → 전력 환산 → 부하 중첩
@@ -228,10 +230,20 @@ parameter effects: A novel approach based on projection neural networks and deep
 - 폭염: SSP 시나리오 **이미 보유**
 
 **Phase 5 — Stress test & 분석**
-- failure boundary (AI 침투율 × 폭염 강도 2차원)
-- 성능 열화 분해: **(a) 완전예지**(= 연간 LP, 구현 완료) vs **(b) 반응형 DPNN**(현재 실측 +
-  시간대 SOC 규칙, lookahead 없음) → (a)의 열화 = **수요충격 기인**, (b)−(a) = **lookahead 부재
-  기인**. 어떤 예측기라도 이 격차 이상은 못 벌므로 **예측기에 무관한 상한**이다
+- failure boundary (AI 침투율 × 폭염 강도 2차원) ← AI 트레이스 대기
+- 성능 열화 분해 — **두 팔이 확정되고 present 기준선을 측정했다.**
+
+  | 팔 | 정의 | 비용 |
+  | --- | --- | --- |
+  | **(a) 완전예지** | 연간 LP (= 48h MPC + oracle 목표) | 156.272억원 |
+  | **(b) 반응형** | 1h 호라이즌 + 시간대 SOC 규칙 + 래칫 목표($\theta$=0) | 157.769억원 (**+0.958%**) |
+
+  (a)의 열화 = **수요충격 기인**, (b)−(a) = **lookahead 부재 기인**으로 present 격차가
+  **1.497억원/년**이다. 예측기는 (a)를 넘을 수 없으므로 **예측기에 무관한 상한**이고, (b)를
+  개선하면 격차가 줄어들 뿐이라 상한 주장은 안전하다.
+- **격차는 믿음이 아니라 호라이즌에서 나온다.** 연간 피크 목표를 틀리는 비용은 +0.007%로 거의
+  0인데(래칫 규칙이 스스로 수렴), 호라이즌을 48h→1h로 줄이면 +0.007→+0.91%로 커지고 12h 아래에서
+  실현 피크가 무너진다. 상세는 `dpnn_feasibility.md`
 - 완화 전략 등가 교환관계: ESS 증설 ↔ workload 유연화 (RQ3)
 
 **Phase 6 — 논문 투고** — Applied Energy / Sustainable Cities and Society / Energy 급 1~2편
@@ -275,12 +287,13 @@ parameter effects: A novel approach based on projection neural networks and deep
 
 ## 6. 현재 상태
 
-**분석·코드 미결 0.** 모든 수치는 `parameters.md` (8)절이 기준이다.
+모든 수치는 `parameters.md` (8)절이 기준이다. **코드 미결 1건** — 짧은 호라이즌용 SOC
+기준선(시간대 *평균*은 12h 아래에서 역효과). 반응형 팔을 조이는 작업이고 결론은 안 바뀐다.
 
 | 노트북 | 상태 |
 | --- | --- |
 | `ess_pv_pipeline.ipynb` | 1~9단계 완료 (45개 조합 + ESS 분해 + Rainflow + 의무충전 + 탄소 민감도 + PV 민감도 + 기후 민감도 그래프) |
-| `dpnn_benchmark.ipynb` | PNN 재현 · MPC · DPNN 학습 · 스윕 가속 완료 |
+| `dpnn_benchmark.ipynb` | PNN 재현 · MPC · 인과적 피크 규칙 · DPNN 학습 · 스윕 가속 완료 |
 
 ### 남은 것 — 전부 사람 몫
 
@@ -290,4 +303,4 @@ parameter effects: A novel approach based on projection neural networks and deep
 | **조원** | 위 2절 수정 4건 → 정책 수혜·미수혜·장기 NPV 곡선 재계산 |
 | **공단** | 통화 3건 (PV 단가 해석, MG 플랫폼비, 2026 선정 결과) |
 | **팀** | 발표 슬라이드, 중간·최종 보고서 갱신 |
-| **Track B** | Phase 4 AI workload 트레이스 + 반응형 팔 → Phase 5 failure boundary → Phase 6 논문 |
+| **Track B** | Phase 4 AI workload 트레이스 → Phase 5 failure boundary → Phase 6 논문. 반응형 팔은 구현 완료 |
