@@ -13,6 +13,8 @@
 # 노트북이 자동 생성하는 캐시·가중치 (재생성 가능)
 /data/*.npz
 /data/*.pt
+/results/econ/*.pkl
+__pycache__/
 
 # 현재 미사용 자료 보관 (삭제 후보)
 /reference/_archive/
