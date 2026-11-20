@@ -7,10 +7,17 @@
 
 시나리오
   기준선  PV 0 + ESS 0 + MG 0 — 실제 미도입. 모든 절감액·NPV 의 기준
-  A      시장단가 PV 130만원/kW, 국비 없음, ESS duration 1~5h 비교, 공고 제약 없음
-  C-1    공고단가 PV 103.6만원/kW, 국비 없음, ESS 5h + 공고 제약(경부하기 의무충전)
+  A      국비 없음, ESS duration 1~5h 비교, 공고 제약 없음
+  C-1    국비 없음, ESS 5h + 공고 제약(경부하기 의무충전)
   C-2    C-1 과 같은 조건 + 조건부 국비(적격 사업비 최대 70%, 캠퍼스 분야 130억 가상 한도)
          C-1 과 보조금 외 조건이 같으므로 C-2 − C-1 = 순수 보조금 효과
+  PV 실제 공사비는 세 시나리오 모두 PV_COST(130만원/kW)로 같다. 공고의 103.6만원/kW 는 국비 산정용
+  인정 상한(PV_ELIG_CAP)으로만 쓴다. 따라서 A(5h) -> C-1 = 충전의무 효과, A(최적 h) -> A(5h) = 5시간
+  요건 효과이고, 단가 차이는 시나리오 비교에 섞이지 않는다.
+
+기준 시간대
+  TOU_BASE = 'new' — 1년 전체를 개편 후 시간대로 청구한다(사업기간 2027~ 의 실제 조건).
+  'split'(2026-06-01 전후 분리)은 과거 고지액 재현(--validate)과 민감도 한 줄로만 남긴다.
 
 설계 원칙
   - ESS 출력(kW)은 LP 결정변수, 용량 = duration x 출력. PV 용량은 최대용량의 0~100% 11점 고정
@@ -61,6 +68,7 @@ CLIMATE_WON, FUEL_WON = 9.0, 5.0                             # 원/kWh
 VAT, FUND = 0.10, 0.027                                      # 부가세 10%, 전력산업기반기금 2.7%(2025.07.01~)
 TAX_F = 1.0 + VAT + FUND                                     # 1.127 — 둘 다 전기요금계에 항목별 부과
 REFORM = pd.Timestamp("2026-06-01")                          # 계시별 시간대 개편, 교육용(을) 적용일
+TOU_BASE = "new"                                             # 기준 시간대: 1년 전체 개편 후(사업기간 2027~)
 S_MONTHS = (12, 1, 2, 7, 8, 9)                               # 기본공급약관 제68조① 참조월
 DEMAND_FLOOR = 0.30 * CONTRACT_KW                            # 제68조① '계약전력의 30% 미만이면 30%'
 # 시간대·주말·공휴일: 전기공급약관 별표3(교육용전력(을) 포함). 개편: 기후부 2026.3.13, 교육용(을) 2026.6.1
@@ -75,8 +83,13 @@ SCC = {"SCC 중위(51USD)": 69_349.0, "SCC 고위(76USD)": 103_344.0}   # 사회
 
 # ---- PV ----
 PV_MAX_KW = 10_305.4
-PV_PRICE = {"A": 1_300_000.0, "C-1": 1_036_000.0, "C-2": 1_036_000.0}
-PV_PRICE_A_HIGH = 1_500_000.0                                # A 시장단가 상향 민감도
+PV_COST = 1_300_000.0                                        # 실제 공사비 원/kW — 세 시나리오 공통(연구 가정)
+PV_ELIG_CAP = 1_036_000.0                                    # 공고 인정 상한(건물 기준) — 국비 산정에만 쓴다
+PV_COST_HIGH = 1_500_000.0                                   # 공사비 상향 민감도
+PV_COST_LOW = PV_ELIG_CAP                                    # 공사비 = 공고 상한이라는 종전 C 가정 — 민감도로만
+# 아래 둘은 ess_pv_pipeline.ipynb 호환용 별칭이다. 이 파일 안에서는 쓰지 않는다.
+PV_PRICE = {"A": PV_COST, "C-1": PV_ELIG_CAP, "C-2": PV_ELIG_CAP}
+PV_PRICE_A_HIGH = PV_COST_HIGH
 PV_DIAG = 33_478.0                                           # 구조안전진단 원/kW (1,500만 x 23동 / 10,305.4)
 PV_OM = {"low": 15_000.0, "high": 20_000.0, "ext": 27_196.0}  # 원/kW·년
 PV_DEG = 0.0094
@@ -339,14 +352,15 @@ def ess_cost_terms(hours, ess_cost="base", repl=ESS_REPL, pcs_repl=False):
     return init, elig, eac_later
 
 
-def subsidy_split(c_pv, platform, plat_eligible=True, sub_cap=SUB_CAP):
-    """C-2 국비: PV 적격분 -> 플랫폼 -> ESS 잔액 순서. (PV 보조, 플랫폼 보조, ESS 에 남은 한도)."""
-    s_pv = min(SUB_RATE * c_pv * (PV_PRICE["C-2"] + PV_DIAG), sub_cap)
+def subsidy_split(c_pv, platform, plat_eligible=True, sub_cap=SUB_CAP, pv_price=PV_COST):
+    """C-2 국비: PV 적격분 -> 플랫폼 -> ESS 잔액 순서. (PV 보조, 플랫폼 보조, ESS 에 남은 한도).
+    PV 적격단가 = min(실제 공사비, 공고 인정 상한). 상한 초과분은 학교 부담."""
+    s_pv = min(SUB_RATE * c_pv * (min(pv_price, PV_ELIG_CAP) + PV_DIAG), sub_cap)
     s_pl = min(SUB_RATE * platform, sub_cap - s_pv) if plat_eligible else 0.0
     return s_pv, s_pl, max(0.0, sub_cap - s_pv - s_pl)
 
 
-def solve(c_pv, hours, scen, s=S_REP, p_fix=None, basis="total", tou="split", demand="monthly",
+def solve(c_pv, hours, scen, s=S_REP, p_fix=None, basis="total", tou=TOU_BASE, demand="monthly",
           co2=CO2, c_deg=C_DEG, self_dis=0.0, mandate=None, ess_cost="base", repl=ESS_REPL,
           pcs_repl=False, platform=PLATFORM_BASE, plat_eligible=True, sub_cap=SUB_CAP):
     """한 해 운전 + ESS 출력 결정. s = PV 출력계수(열화). p_fix 가 있으면 출력 고정(연차 평가용).
@@ -519,7 +533,7 @@ def cashflow(design, f, base, *, pv_price, pv_om, platform, plat_om_rate, subsid
     capex0 = capex_ess + capex_pv + platform
     sub = 0.0
     if subsidy:
-        s_pv, s_pl, rem = subsidy_split(c_pv, platform, plat_eligible, sub_cap)
+        s_pv, s_pl, rem = subsidy_split(c_pv, platform, plat_eligible, sub_cap, pv_price)
         sub = s_pv + s_pl + min(SUB_RATE * P * elig, rem)
 
     y = np.arange(1, YEARS + 1)
@@ -527,6 +541,7 @@ def cashflow(design, f, base, *, pv_price, pv_om, platform, plat_om_rate, subsid
     bill = np.array([f("청구액", s) for s in sy])
     grid_kwh = np.array([f("수전kWh", s) for s in sy])
     elec = base["청구액"] - bill
+    elec_dem = (base["기본요금"] - np.array([f("기본요금", s) for s in sy])) * TAX_F   # 세후, elec 의 일부
     tco2 = (base["수전kWh"] - grid_kwh) / 1000 * co2
     carb = tco2 * carbon_price
     om_pv = np.full(YEARS, c_pv * pv_om)
@@ -576,10 +591,13 @@ def cashflow(design, f, base, *, pv_price, pv_om, platform, plat_om_rate, subsid
     return dict(초기투자=capex0, 국비=sub, 학교초기부담=capex0 - sub,
                 PV_ESS투자=capex_ess, PV_PV투자=capex_pv,
                 PV_전기요금절감=float((elec * d).sum()), PV_배출권절감=float((carb * d).sum()),
+                PV_기본요금절감=float((elec_dem * d).sum()),
+                PV_전력량등절감=float(((elec - elec_dem) * d).sum()),
                 PV_OM=float(((om_pv + om_ess + om_pl) * d).sum()), PV_교체=float((repl_cf * d).sum()),
                 PV_잔존=float((resid * d).sum()),
                 NPV=npv, NPV_전기요금만=npv_elec, 회수기간=payback(cum), 할인회수기간=payback(dcum),
                 IRR=irr(), 절감_1년차_전기요금=float(elec[0]), 절감_1년차_배출권=float(carb[0]),
+                절감_1년차_기본요금=float(elec_dem[0]), 절감_1년차_전력량등=float(elec[0] - elec_dem[0]),
                 감축_1년차_tCO2=float(tco2[0]), 감축_25년_tCO2=float(tco2.sum()), **scc)
 
 
@@ -609,7 +627,7 @@ def run_design(task):
     return dict(task=task, C_PV_kW=c_pv, P_ess_kW=o_rep["P_ess_kW"], hours=h, points=pts)
 
 
-def baseline(tou="split", demand="monthly"):
+def baseline(tou=TOU_BASE, demand="monthly"):
     inp = inputs()
     price, mask = tariff(inp, tou)
     out = bill_of(inp["L"], price, inp["month"], demand, mask)
@@ -692,7 +710,7 @@ def sens_tasks(a_h):
                         ("PCS정비30%(PNNL)", dict(pcs_repl=True)),
                         ("기본요금x12", dict(demand="x12")),
                         ("시간대_개편전", dict(tou="old")),
-                        ("시간대_개편후", dict(tou="new")),
+                        ("시간대_split", dict(tou="split")),
                         ("시간대_종전코드", dict(tou="legacy")),
                         ("배출계수0.45941", dict(co2=CO2_OLD))):
             T.append(dict(tag=tag, scen=scen, frac=1.0, hours=h, kw=kw))
@@ -765,9 +783,9 @@ def evaluate(r, base, **over):
     kw = task.get("kw", {})
     scen = task["scen"]
     if "tou" in kw or "demand" in kw:          # 요금 체계 민감도는 기준선도 같은 요금으로 청구해야 절감액이 맞다
-        base = baseline(kw.get("tou", "split"), kw.get("demand", "monthly"))
+        base = baseline(kw.get("tou", TOU_BASE), kw.get("demand", "monthly"))
     f = curve(r["points"])
-    args = dict(pv_price=PV_PRICE[scen], pv_om=PV_OM["high"], platform=kw.get("platform", PLATFORM_BASE),
+    args = dict(pv_price=PV_COST, pv_om=PV_OM["high"], platform=kw.get("platform", PLATFORM_BASE),
                 plat_om_rate=PLATFORM_OM_RATE["10%"], subsidy=(scen == "C-2"),
                 plat_eligible=kw.get("plat_eligible", True), repl=kw.get("repl", ESS_REPL),
                 pcs_repl=kw.get("pcs_repl", False), ess_cost=kw.get("ess_cost", "base"),
@@ -778,13 +796,16 @@ def evaluate(r, base, **over):
     orep = dict(r["points"])[S_REP]
     row = dict(시나리오=scen, 민감도=task["tag"], PV비율=task["frac"], PV_kW=r["C_PV_kW"],
                duration_h=r["hours"], ESS_kW=r["P_ess_kW"], ESS_kWh=r["P_ess_kW"] * r["hours"],
-               청구액_1년차=o1["청구액"], 피크_1년차=o1["연간피크kW"], EFC_년=orep["EFC_년"],
+               청구액_1년차=o1["청구액"], 전시간최대_1년차=o1["연간피크kW"],
+               적용전력합_1년차=o1["적용전력합kW"], 기본요금_1년차=o1["기본요금"], 전력량요금_1년차=o1["전력량요금"],
+               EFC_년=orep["EFC_년"],
                동시충방전=max(p[1]["동시충방전"] for p in r["points"]),
                출력제한kWh=orep["출력제한kWh"], 청구액_x12_대표=orep["청구액_x12"],
                청구액_월별_대표=orep["청구액"])
     row.update(cf)
-    if args["subsidy"]:                         # C-2: 같은 설계를 국비 없이 = 총사업비 관점
-        row["NPV_총사업비관점"] = cashflow(r, f, base, **dict(args, subsidy=False))["NPV"]
+    # 같은 설계를 국비 없이 = 총사업비 관점. 국비가 없는 A·C-1 은 NPV 와 같다
+    row["NPV_총사업비관점"] = (cashflow(r, f, base, **dict(args, subsidy=False))["NPV"]
+                         if args["subsidy"] else cf["NPV"])
     return row
 
 
@@ -834,7 +855,7 @@ def bipv_and_check(res_main, res_extra, base, a_h):
     designs = headline_designs(res_main, a_h)
     inp = inputs()
     pu = inp["p_unit"]
-    price = tou_price(inp, "split")
+    price = tou_price(inp, TOU_BASE)
     v_energy = float((pu * (price + CLIMATE_WON + FUEL_WON) * TAX_F).sum() / pu.sum())   # 원/kWh, PV가중
     kwh_lb = BIPV_EQ_KW * pv_yield() * PV_F                  # 두 방법이 같은 발전량을 쓰고 시점만 다르게
     rows = []
@@ -864,7 +885,7 @@ def bipv_and_check(res_main, res_extra, base, a_h):
         d = designs[scen]
         exact = {float(s): o for s, o in ex}
         f_ex = lambda key, s: exact[float(s)][key]
-        args = dict(pv_price=PV_PRICE[scen], pv_om=PV_OM["high"], platform=PLATFORM_BASE,
+        args = dict(pv_price=PV_COST, pv_om=PV_OM["high"], platform=PLATFORM_BASE,
                     plat_om_rate=PLATFORM_OM_RATE["10%"], subsidy=(scen == "C-2"))
         n_int = cashflow(d, curve(d["points"]), base, **args)["NPV"]
         n_ex = cashflow(d, f_ex, base, **args)["NPV"]
@@ -893,8 +914,8 @@ def report(res_main, res_sens, res_extra, base, a_h):
                           ("플랫폼 O&M 15%", dict(plat_om_rate=PLATFORM_OM_RATE["15%"])),
                           ("배출권 0원(현금편익 미확정)", dict(carbon_price=0.0))):
             rows.append(dict(evaluate(r, base, **over), 사후민감도=tag))
-        if t["scen"] == "A":
-            rows.append(dict(evaluate(r, base, pv_price=PV_PRICE_A_HIGH), 사후민감도="A 시장단가 150만"))
+        rows.append(dict(evaluate(r, base, pv_price=PV_COST_HIGH), 사후민감도="PV 공사비 150만"))
+        rows.append(dict(evaluate(r, base, pv_price=PV_COST_LOW), 사후민감도="PV 공사비 103.6만(공고 상한)"))
         for pl in PLATFORM_LEVELS:
             rows.append(dict(evaluate(r, base, platform=pl), 사후민감도=f"플랫폼 {pl / 1e8:.0f}억(설계 고정)"))
     post_df = pd.DataFrame(rows)
